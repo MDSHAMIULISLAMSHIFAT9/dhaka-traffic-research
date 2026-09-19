@@ -16,24 +16,18 @@ REPO = "dhaka-traffic-research"
 BRANCH = "main"
 CSV_NAME = "dhaka_osrm_traffic_data.csv"
 
-# Time zone in which osrm_logger.py wrote the Timestamp column.
-# GitHub Actions runners use UTC, so "UTC" is correct unless your script
-# explicitly wrote Dhaka time (then set "Asia/Dhaka").
-LOGGER_TZ = "UTC"
-LOCAL_TZ = "Asia/Dhaka"                        # UTC+6, no DST
+# traffic_logger.py writes timestamps in Asia/Dhaka local time.
+LOGGER_TZ = "Asia/Dhaka"
+LOCAL_TZ = "Asia/Dhaka"
 
-# You can point the pipeline at a local file instead of GitHub:
-#   export DATA_SOURCE=/path/to/dhaka_osrm_traffic_data.csv
 DATA_SOURCE = os.environ.get("DATA_SOURCE") or (
     f"https://raw.githubusercontent.com/{GITHUB_USER}/{REPO}/{BRANCH}/{CSV_NAME}"
 )
 
-# Cleaning thresholds
-MAX_SPEED_KMH = 120.0     # physically implausible for urban Dhaka above this
-DIST_TOL = 0.25           # drop rows whose distance deviates >25% from corridor median
-EXPECTED_PER_DAY = 96     # 24 h * 4 snapshots/h per corridor
+MAX_SPEED_KMH = 120.0
+DIST_TOL = 0.25
+EXPECTED_PER_DAY = 96
 
-# Study design constants
 DAY_ORDER = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
 SLOT_ORDER = ["Morning Peak", "Midday", "Evening Peak", "Night"]
 FOCUS_DAYS = ["Thursday", "Friday", "Sunday"]
@@ -63,7 +57,7 @@ def load_raw(source: str | None = None) -> pd.DataFrame:
     source = source or DATA_SOURCE
     if source.startswith("http"):
         headers = {}
-        token = os.environ.get("GITHUB_TOKEN")          # only needed for private repos
+        token = os.environ.get("GITHUB_TOKEN")
         if token:
             headers["Authorization"] = f"token {token}"
         resp = requests.get(source, headers=headers, timeout=60)
@@ -80,7 +74,6 @@ def load_raw(source: str | None = None) -> pd.DataFrame:
 
 
 def _blank_to_na(s: pd.Series) -> pd.Series:
-    """Strip whitespace; map '', 'None', 'ERROR', 'NaN', ... to missing (None)."""
     def fix(v):
         if v is None or pd.isna(v):
             return None
@@ -89,22 +82,7 @@ def _blank_to_na(s: pd.Series) -> pd.Series:
     return s.astype(object).map(fix)
 
 
-# --------------------------------------------------------------------------
-# 4. CLEANING  (Phase 1)
-# --------------------------------------------------------------------------
 def clean(raw: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
-    """
-    Returns (clean_df, report). Rules, applied in this order:
-      1. drop repeated header rows (logger appended the header again)
-      2. blank / 'None' / 'ERROR' API responses -> NaN, then drop incomplete rows
-      3. drop zero or negative durations / distances
-      4. drop exact duplicate (Timestamp, Corridor_Name) rows
-      5. convert to Asia/Dhaka and RECOMPUTE Day_of_Week from local time
-      6. drop rows whose distance deviates > DIST_TOL from the corridor median
-      7. compute Speed_kmh = Distance_km / (Estimated_Duration_Min / 60)
-      8. drop physically impossible speeds (> MAX_SPEED_KMH)
-    Tail values are NOT trimmed: volatility is the object of study.
-    """
     rep: dict = {"rows_raw": int(len(raw))}
     df = raw[REQUIRED].copy()
     for c in REQUIRED:
@@ -117,12 +95,9 @@ def clean(raw: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     for c in ("Distance_km", "Estimated_Duration_Min"):
         df[c] = pd.to_numeric(df[c], errors="coerce")
 
-    try:
-        ts = pd.to_datetime(df["Timestamp"], errors="coerce", format="mixed")
-        if ts.dt.tz is None:
-            ts = ts.dt.tz_localize(LOGGER_TZ, ambiguous="NaT", nonexistent="NaT")
-    except (TypeError, AttributeError, ValueError):
-        ts = pd.to_datetime(df["Timestamp"], errors="coerce", utc=True)
+    ts = pd.to_datetime(df["Timestamp"], errors="coerce", format="mixed")
+    if ts.dt.tz is None:
+        ts = ts.dt.tz_localize(LOGGER_TZ, ambiguous="NaT", nonexistent="NaT")
     df["Timestamp"] = ts.dt.tz_convert(LOCAL_TZ)
 
     need = ["Timestamp", "Corridor_Name", "Distance_km", "Estimated_Duration_Min"]
@@ -157,14 +132,7 @@ def clean(raw: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     return df, rep
 
 
-# --------------------------------------------------------------------------
-# 5. TIME FEATURES  (Phase 2)
-# --------------------------------------------------------------------------
 def add_time_features(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Morning Peak 07:00-09:59 | Midday 10:00-15:59 | Evening Peak 16:00-19:59 | Night 20:00-06:59
-    (local Dhaka time, left-closed hourly bins)
-    """
     d = df.copy()
     d["Date"] = d["Timestamp"].dt.strftime("%Y-%m-%d")
     d["Hour"] = d["Timestamp"].dt.hour
@@ -180,7 +148,6 @@ def add_time_features(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def load_processed() -> pd.DataFrame:
-    """Read data/processed.csv written by 02_ingest_preprocess.py."""
     if not PROCESSED_CSV.exists():
         raise FileNotFoundError("Run 02_ingest_preprocess.py first (data/processed.csv not found).")
     d = pd.read_csv(PROCESSED_CSV)
@@ -191,7 +158,5 @@ def load_processed() -> pd.DataFrame:
 
 
 def corridor_ids(df: pd.DataFrame) -> dict:
-    """Map corridor name -> short ID (C1 = fastest mean speed, C2 = next, ...).
-    Used for compact table/figure labels; the paper's corridor table gives the names."""
     order = df.groupby("Corridor_Name")["Speed_kmh"].mean().sort_values(ascending=False).index
     return {name: f"C{i + 1}" for i, name in enumerate(order)}

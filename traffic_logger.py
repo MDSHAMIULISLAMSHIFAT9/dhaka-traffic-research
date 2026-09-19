@@ -3,7 +3,8 @@ from datetime import datetime, timezone
 import requests
 
 API_KEY = os.environ.get("TOMTOM_API_KEY", "").strip()
-CSV_PATH = "dhaka_osrm_traffic_data.csv"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CSV_PATH = os.path.join(BASE_DIR, "dhaka_osrm_traffic_data.csv")
 FIELDS = ["Timestamp", "Day_of_Week", "Corridor_Name", "Distance_km", "Estimated_Duration_Min"]
 
 CORRIDORS = {
